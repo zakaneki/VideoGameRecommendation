@@ -1,52 +1,68 @@
 import requests
 
-# Replace these with your actual Client ID and Client Secret
+# Replace with your actual Client ID and Client Secret
 CLIENT_ID = '99o9s3clx1qlil5bfxht4au3mtpesb'
 CLIENT_SECRET = 'j2z3b57u2pm0k1umoci0z4vzzsgkw1'
 
-def get_access_token(client_id, client_secret):
-    # Endpoint for Twitch OAuth token
+def get_access_token():
     url = 'https://id.twitch.tv/oauth2/token'
     params = {
-        'client_id': client_id,
-        'client_secret': client_secret,
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
         'grant_type': 'client_credentials'
     }
-    
     response = requests.post(url, params=params)
     response.raise_for_status()
     data = response.json()
-    print("Time to get access token:", data['expires_in'], "seconds")
+    print("Token expires in (seconds):", data['expires_in'])
     return data['access_token']
 
 def query_igdb(access_token, endpoint, body):
-    # IGDB API URL
     url = f'https://api.igdb.com/v4/{endpoint}'
-    
     headers = {
         'Client-ID': CLIENT_ID,
         'Authorization': f'Bearer {access_token}'
     }
-    
     response = requests.post(url, headers=headers, data=body)
     response.raise_for_status()
     return response.json()
 
+def get_names_from_ids(ids, endpoint, access_token):
+    # Fetch names for list of IDs
+    url = f'https://api.igdb.com/v4/{endpoint}'
+    headers = {
+        'Client-ID': CLIENT_ID,
+        'Authorization': f'Bearer {access_token}'
+    }
+    ids_str = ', '.join(str(i) for i in ids)
+    body = f'fields name; where id = ({ids_str});'
+    resp = requests.post(url, headers=headers, data=body)
+    resp.raise_for_status()
+    return [item['name'] for item in resp.json()]
+
 def main():
-    # Step 1: Get access token
-    access_token = get_access_token(CLIENT_ID, CLIENT_SECRET)
-    print("Access Token:", access_token)
-    
-    # Step 2: Use the token to query IGDB
-    # Example: Get the first 5 games with their name and release date
-    igdb_body = '''
-        fields *; 
+    access_token = get_access_token()
+
+    # Fetch first 10 games
+    body_games = '''
+        fields id, name, genres, keywords;
         limit 10;
     '''
+    games = query_igdb(access_token, 'games', body_games)
 
-    # Replace 'games' with your desired IGDB endpoint
-    response_data = query_igdb(access_token, 'games', igdb_body)
-    print("IGDB Response:", response_data)
+    for game in games:
+        name = game['name']
+        genre_ids = game.get('genres', [])
+        keyword_ids = game.get('keywords', [])
+        # Get genre names
+        genres = get_names_from_ids(genre_ids, 'genres', access_token) if genre_ids else []
+        # Get keyword names
+        keywords = get_names_from_ids(keyword_ids, 'keywords', access_token) if keyword_ids else []
+
+        print(f"Game: {name}")
+        print(f"  Genres: {', '.join(genres) if genres else 'N/A'}")
+        print(f"  Keywords: {', '.join(keywords) if keywords else 'N/A'}")
+        print("-" * 40)
 
 if __name__ == '__main__':
     main()
