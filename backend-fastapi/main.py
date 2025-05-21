@@ -201,8 +201,8 @@ def fetch_and_store_all(access_token, endpoint_path, collection_name, mongo_clie
         print(f"Error fetching count for {endpoint_path}: {e}. Skipping this endpoint.")
         return
 
-    offset = 0
-    items_processed_count = 0
+    offset = 0 if endpoint_path != "games" else 128000
+    items_processed_count = 0 if endpoint_path != "games" else 128000
     
     while offset < total_items:
         # Construct the query body for fetching a batch of items
@@ -283,33 +283,33 @@ def main():
 
         endpoints = [
            # "age_ratings",
-            "age_rating_categories",
-            "age_rating_content_descriptions_v2",
-            "age_rating_organizations",
-            "alternative_names",
-           # "artworks",
-            "characters",
-            "character_genders",
-            "character_mug_shots",
-            "character_species",
-            "collections",
-            "collection_memberships",
-            "collection_membership_types",
-            "collection_relations",
-            "collection_relation_types",
-            "collection_types",
-           # "companies",
-            "company_logos",
-            "company_statuses",
-            "company_websites",
-            "covers",
-            "date_formats",
-            "event_logos",
-            "event_networks",
-            "events",
-           # "external_games",
-            "external_game_sources",
-            "franchises",
+        #     "age_rating_categories",
+        #     "age_rating_content_descriptions_v2",
+        #     "age_rating_organizations",
+        #     "alternative_names",
+        #    # "artworks",
+        #     "characters",
+        #     "character_genders",
+        #     "character_mug_shots",
+        #     "character_species",
+        #     "collections",
+        #     "collection_memberships",
+        #     "collection_membership_types",
+        #     "collection_relations",
+        #     "collection_relation_types",
+        #     "collection_types",
+        #    # "companies",
+        #     "company_logos",
+        #     "company_statuses",
+        #     "company_websites",
+        #     "covers",
+        #     "date_formats",
+        #     "event_logos",
+        #     "event_networks",
+        #     "events",
+        #    # "external_games",
+        #     "external_game_sources",
+        #     "franchises",
             "games",
             "game_engines",
             "game_engine_logos",

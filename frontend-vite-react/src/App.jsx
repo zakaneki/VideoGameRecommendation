@@ -11,7 +11,7 @@ function App() {
   const [suggestions, setSuggestions] = useState([]); // State for search suggestions
   const [isSuggestionsVisible, setIsSuggestionsVisible] = useState(false); // Control visibility
 
-  const API_BASE_URL = 'http://localhost:8000'; // Your FastAPI backend URL
+  const API_BASE_URL = 'https://game-recommender-api-952910162906.europe-west1.run.app'; // Your FastAPI backend URL
 
   // Debounce function
   const debounce = (func, delay) => {
