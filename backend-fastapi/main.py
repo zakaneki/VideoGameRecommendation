@@ -1,17 +1,144 @@
 import requests
-import json # query_igdb returns JSON, but json module might not be directly used in main
 import pymongo # For MongoDB interaction
 import time
+import meilisearch
+from datetime import datetime
+import os
+
+MEILI_HOST_URL = os.environ.get("MEILI_HOST_URL", "http://localhost:7700")
+MEILI_MASTER_KEY = os.environ.get("MEILI_MASTER_KEY", "dCR0hml5LZ_dagKTTssIaJT4i0Tdx5dbxZHcw5x5QAc") # Use the same key you started Meilisearch with
+MEILI_INDEX_NAME = "games"
 
 # Replace with your actual Client ID and Client Secret
 CLIENT_ID = '99o9s3clx1qlil5bfxht4au3mtpesb'
 CLIENT_SECRET = 'j2z3b57u2pm0k1umoci0z4vzzsgkw1'
 
 # --- MongoDB Connection Details ---
-MONGO_CONNECTION_STRING = "mongodb://localhost:27017/" # Default local MongoDB
+MONGO_CONNECTION_STRING = os.environ.get("MONGO_CONNECTION_STRING","mongodb://localhost:27017/") # Default local MongoDB
 MONGO_DB_NAME = "igdb_data"
 # Collection names will be 'games', 'age_ratings', 'age_rating_content_descriptions_v2'
 # --- ---
+MONGO_COVERS_COLLECTION_NAME = "covers"
+
+def setup_meilisearch_index(client):
+    try:
+        # Create index if it doesn't exist
+        client.create_index(MEILI_INDEX_NAME, {'primaryKey': 'id'})
+        print(f"Index '{MEILI_INDEX_NAME}' created or already exists.")
+        
+        index = client.index(MEILI_INDEX_NAME)
+
+        # Configure filterable attributes (essential for your /search-games endpoint)
+        filterable_attributes_task = index.update_filterable_attributes([
+            'parent_game', 
+            'version_parent', 
+            'game_type'
+        ])
+        print(f"Update filterable attributes task: {filterable_attributes_task.task_uid}")
+        
+        # Configure searchable attributes (what fields Meilisearch should primarily search in)
+        searchable_attributes_task = index.update_searchable_attributes([
+            'name' # Most important for name-based search
+            # You could add other fields like alternative_names if you index them
+        ])
+        print(f"Update searchable attributes task: {searchable_attributes_task.task_uid}")
+
+        # Configure displayed attributes (what is returned in search results by default)
+        # Your /search-games endpoint specifies 'attributesToRetrieve', so this is less critical for that specific endpoint
+        # but good practice.
+        displayed_attributes_task = index.update_displayed_attributes([
+            'id',
+            'name',
+            'parent_game', # Useful for debugging filters
+            'version_parent',
+            'game_type',
+            'cover_url',
+            'release_year'
+            # Add other fields you might want to see directly from Meilisearch
+        ])
+        print(f"Update displayed attributes task: {displayed_attributes_task.task_uid}")
+
+        # Configure ranking rules (optional, but can fine-tune relevance)
+        # Default ranking rules are usually good to start.
+        # Example: index.update_ranking_rules([...])
+
+        print("Meilisearch index configuration tasks submitted. Check task statuses for completion.")
+        # You might want to add a loop here to wait for tasks to complete for critical setups.
+        # For example:
+        # client.wait_for_task(filterable_attributes_task.task_uid)
+        # client.wait_for_task(searchable_attributes_task.task_uid)
+        # client.wait_for_task(displayed_attributes_task.task_uid)
+        # print("Meilisearch index settings applied.")
+
+
+    except Exception as e:
+        print(f"Error setting up Meilisearch index '{MEILI_INDEX_NAME}': {e}")
+
+def add_games_to_meilisearch(games_list: list, meili_client_instance, mongo_db_instance):
+    if not meili_client_instance:
+        print("Meilisearch client not initialized. Skipping add to Meilisearch.")
+        return
+    if not games_list:
+        print("No games to add to Meilisearch.")
+        return
+    if mongo_db_instance is None:
+        print("MongoDB instance not provided to add_games_to_meilisearch. Skipping.")
+        return
+
+    index = meili_client_instance.index(MEILI_INDEX_NAME)
+    covers_collection = mongo_db_instance[MONGO_COVERS_COLLECTION_NAME]
+    documents_to_add = []
+    for game_doc in games_list:
+        cover_url = None
+        cover_id = game_doc.get('cover') # This is the ID of the cover document
+        if cover_id:
+            cover_info = covers_collection.find_one({"id": cover_id})
+            if cover_info and cover_info.get('url'):
+                # Using t_cover_small for suggestions, adjust if needed (e.g., t_thumb)
+                cover_url = "https://images.igdb.com/igdb/image/upload/t_cover_small/" + cover_info.get('url').split('/')[-1]
+
+        release_year = None
+        first_release_timestamp = game_doc.get('first_release_date')
+        if first_release_timestamp:
+            try:
+                if first_release_timestamp >= 0:
+                    release_year = datetime.fromtimestamp(first_release_timestamp).year
+                else:
+                    # Manually calculate year for negative Unix timestamps (before 1970)
+                    # 1 year = 31556952 seconds (average, accounting for leap years)
+                    # 1970 + (timestamp / seconds_per_year)
+                    seconds_per_year = 31556952
+                    year = 1970 + int(first_release_timestamp // seconds_per_year)
+                    release_year = year
+            except (TypeError, ValueError):
+                pass # Handle cases where timestamp might be invalid
+
+        # Select only the fields you want in Meilisearch
+        # Ensure 'id' is present and is the primary key
+        doc = {
+            'id': game_doc.get('id'), # Must match primaryKey
+            'name': game_doc.get('name'),
+            'parent_game': game_doc.get('parent_game'), # Will be None if not present
+            'version_parent': game_doc.get('version_parent'), # Will be None if not present
+            'game_type': game_doc.get('game_type'), # Will be None if not present
+            'cover_url': cover_url, # Add constructed cover_url
+            'release_year': release_year
+        }
+        # Ensure 'id' is not None
+        if doc['id'] is not None:
+             documents_to_add.append(doc)
+        else:
+            print(f"Skipping game due to missing ID: {str(game_doc)[:100]}")
+
+    
+    if documents_to_add:
+        try:
+            task_info = index.add_documents(documents_to_add, primary_key='id')
+            print(f"Meilisearch: Submitted {len(documents_to_add)} documents. Task UID: {task_info.task_uid}")
+            # For critical data, you might want to wait for the task:
+            # meili_client_instance.wait_for_task(task_info.task_uid)
+        except Exception as e:
+            print(f"Error adding documents to Meilisearch: {e}")
 
 def get_access_token():
     url = 'https://id.twitch.tv/oauth2/token'
@@ -37,7 +164,7 @@ def query_igdb(access_token, endpoint, body):
     response.raise_for_status()
     return response.json()
 
-def fetch_and_store_all(access_token, endpoint_path, collection_name, mongo_client, fields_to_fetch_string="fields *;", batch_limit=100):
+def fetch_and_store_all(access_token, endpoint_path, collection_name, mongo_client, meili_client_instance, fields_to_fetch_string="fields *;", batch_limit=100):
     """
     Fetches all data from a given IGDB endpoint and stores it in a MongoDB collection.
     """
@@ -89,7 +216,9 @@ def fetch_and_store_all(access_token, endpoint_path, collection_name, mongo_clie
                 print(f"No items returned for '{endpoint_path}' at offset {offset}. This might be the end or an issue.")
                 # If total_items was > 0, this might indicate an issue or end of actual data despite count
                 break 
-            
+
+            if endpoint_path == "games" and batch_data: # batch_data contains the list of game dicts
+                add_games_to_meilisearch(batch_data, meili_client_instance, db)
             operations = []
             for item_doc in batch_data:
                 if 'id' not in item_doc:
@@ -137,16 +266,28 @@ def main():
     access_token = get_access_token()
     mongo_client = pymongo.MongoClient(MONGO_CONNECTION_STRING)
     
+    meili_client_instance = None
+    try:
+        meili_client_instance = meilisearch.Client(MEILI_HOST_URL, MEILI_MASTER_KEY)
+        # Basic check to see if Meilisearch is reachable
+        setup_meilisearch_index(meili_client_instance)
+        
+        if not meili_client_instance.is_healthy():
+            print("Warning: Meilisearch is connected but reported as not healthy after setup attempt.")
+    except Exception as e:
+        print(f"Could not connect to Meilisearch: {e}. Proceeding without Meilisearch indexing.")
+        meili_client_instance = None # Ensure it's None if connection failed
+
     try:
         print(f"Connected to MongoDB. Using database: '{MONGO_DB_NAME}'")
 
         endpoints = [
-            "age_ratings",
+           # "age_ratings",
             "age_rating_categories",
             "age_rating_content_descriptions_v2",
             "age_rating_organizations",
             "alternative_names",
-            "artworks",
+           # "artworks",
             "characters",
             "character_genders",
             "character_mug_shots",
@@ -157,7 +298,7 @@ def main():
             "collection_relations",
             "collection_relation_types",
             "collection_types",
-            "companies",
+           # "companies",
             "company_logos",
             "company_statuses",
             "company_websites",
@@ -166,7 +307,7 @@ def main():
             "event_logos",
             "event_networks",
             "events",
-            "external_games",
+           # "external_games",
             "external_game_sources",
             "franchises",
             "games",
@@ -184,9 +325,9 @@ def main():
             "game_videos",
             "genres",
             "keywords",
-            "involved_companies",
+           # "involved_companies",
             "languages",
-            "language_supports",
+           # "language_supports",
             "language_support_types",
             "multiplayer_modes",
             "network_types",
@@ -205,13 +346,13 @@ def main():
             "release_dates",
             "release_date_regions",
             "release_date_statuses",
-            "screenshots",
+           # "screenshots",
             "themes",
-            "websites",
+           # "websites",
             "website_types"
         ]
         for endpoint in endpoints:
-            fetch_and_store_all(access_token, endpoint, endpoint, mongo_client, batch_limit=500)
+            fetch_and_store_all(access_token, endpoint, endpoint, mongo_client, meili_client_instance, batch_limit=500)
 
     except Exception as e:
         print(f"An error occurred in the main execution: {e}")
