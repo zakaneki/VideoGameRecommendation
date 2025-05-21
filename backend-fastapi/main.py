@@ -201,8 +201,8 @@ def fetch_and_store_all(access_token, endpoint_path, collection_name, mongo_clie
         print(f"Error fetching count for {endpoint_path}: {e}. Skipping this endpoint.")
         return
 
-    offset = 0 if endpoint_path != "games" else 128000
-    items_processed_count = 0 if endpoint_path != "games" else 128000
+    offset = 0
+    items_processed_count = 0
     
     while offset < total_items:
         # Construct the query body for fetching a batch of items
